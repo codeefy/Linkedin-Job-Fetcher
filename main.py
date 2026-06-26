@@ -63,21 +63,47 @@ def scrape_linkedin_jobs(
     chromedriver_autoinstaller.install()
 
     chrome_options = webdriver.ChromeOptions()
-    for option in ["--window-size=1200,1200", "--ignore-certificate-errors"]:
-        chrome_options.add_argument(option)
+    chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("--ignore-certificate-errors")
 
+    # Anti-detection flags
+    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    chrome_options.add_experimental_option("useAutomationExtension", False)
+    chrome_options.add_argument(
+        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    )
+
+    # Comment this out if you want to see the browser window while testing locally
     chrome_options.add_argument("--headless")
+
     if platform.system() == "Linux":
-        # Required for Chrome in containerized/CI environments (no kernel namespace support)
+        # Required for Chrome in containerized/CI environments
         for opt in ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]:
             chrome_options.add_argument(opt)
 
     driver = webdriver.Chrome(options=chrome_options)
 
-    driver.get(
+    # Mask webdriver property to avoid bot detection
+    driver.execute_cdp_cmd(
+        "Page.addScriptToEvaluateOnNewDocument",
+        {"source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"},
+    )
+
+    url = (
         f"https://www.linkedin.com/jobs/search/?f_E=1&origin=JOB_SEARCH_PAGE_JOB_FILTER"
         f"&geoId=102713980&keywords={job_title}&location={location}&refresh=true&sortBy=DD"
     )
+    driver.get(url)
+
+    # Debug: log page title and URL to confirm LinkedIn loaded correctly
+    logging.info(f"Page title: {driver.title}")
+    logging.info(f"Current URL: {driver.current_url}")
+
+    # Wait for job cards to appear before scrolling
+    time.sleep(random.choice(range(4, 8)))
 
     for i in range(pages):
         logging.info(f"Scrolling page {i + 1} of {pages}...")
