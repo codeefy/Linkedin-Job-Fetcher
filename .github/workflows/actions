@@ -39,7 +39,7 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add -A
-          git diff-index --quiet HEAD || git commit -m "updated data Co-authored-by: brf153"
+          git diff-index --quiet HEAD || git commit -m "updated data Co-authored-by: codeefy"
 
       - name: Push changes
         uses: ad-m/github-push-action@v0.8.0
