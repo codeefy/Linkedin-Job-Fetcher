@@ -198,6 +198,12 @@ def save_job_data(data: list) -> None:
     data = sorted(data, key=lambda x: x["Date Posted"], reverse=True)
     df = pd.DataFrame(data)
 
+    # ADD THESE 4 LINES
+    import json
+    with open("jobs.json", "w") as f:
+        json.dump(data, f, indent=2)
+    logging.info("Saved jobs.json")
+
     with open("README.md", "r") as f:
         readme_content = f.read()
 
