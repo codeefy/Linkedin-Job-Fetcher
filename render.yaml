@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: honey-bunny-api
+    runtime: python
+    buildCommand: |
+      pip install --upgrade pip
+      pip install -r requirements.txt
+      apt-get update && apt-get install -y chromium-browser chromium-chromedriver
+    startCommand: uvicorn api:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: DISPLAY
+        value: ":99"
+    plan: free
