@@ -46,4 +46,4 @@ jobs:
         with:
           github_token: ${{ secrets.GH_TOKEN }}
           branch: main
-          repository: brf153/linkedin-job-fetcher
+          repository: codeefy/linkedin-job-fetcher
