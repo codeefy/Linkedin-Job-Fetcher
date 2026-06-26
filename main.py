@@ -1,5 +1,6 @@
 import logging
 import sys
+import json
 import platform
 from datetime import datetime, timedelta
 from selenium import webdriver
@@ -18,16 +19,8 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 
-# Keywords used to filter job titles — case-insensitive substring match
-INTERN_KEYWORDS = ["intern", "apprentice", "trainee", "internship"]
-
 # Only keep jobs posted within this many days
 MAX_DAYS_OLD = 30
-
-
-def _matches_keywords(title: str, keywords: list[str]) -> bool:
-    title_lower = title.lower()
-    return any(kw in title_lower for kw in keywords)
 
 
 def _is_recent(date_str: str, max_days: int) -> bool:
@@ -54,11 +47,8 @@ def scrape_linkedin_jobs(
     job_title: str,
     location: str,
     pages: int = 3,
-    keywords: list[str] = None,
     max_days_old: int = MAX_DAYS_OLD,
 ) -> list:
-    if keywords is None:
-        keywords = INTERN_KEYWORDS
 
     chromedriver_autoinstaller.install()
 
@@ -148,10 +138,6 @@ def scrape_linkedin_jobs(
             apply_link = link_elem["href"]
             date_posted = time_elem.get("datetime", "")
 
-            # Skip if doesn't match keyword filter
-            # if not _matches_keywords(title_text, keywords):
-            #     continue
-
             # Skip stale postings
             if not _is_recent(date_posted, max_days_old):
                 logging.info(f'Skipping stale posting: "{title_text}" ({date_posted})')
@@ -176,6 +162,7 @@ def scrape_linkedin_jobs(
                     "Link": f"[Apply]({apply_link})",
                     "Date Posted": date_posted,
                     "Description": description[:300] + "..." if len(description) > 300 else description,
+                    "Search Role": job_title,  # track which search this came from
                 }
             )
 
@@ -198,8 +185,7 @@ def save_job_data(data: list) -> None:
     data = sorted(data, key=lambda x: x["Date Posted"], reverse=True)
     df = pd.DataFrame(data)
 
-    # ADD THESE 4 LINES
-    import json
+    # Save as JSON for the frontend
     with open("jobs.json", "w") as f:
         json.dump(data, f, indent=2)
     logging.info("Saved jobs.json")
@@ -227,35 +213,66 @@ def save_job_data(data: list) -> None:
     logging.info(f"Saved {len(data)} jobs to README.md")
 
 
+# Default roles scraped automatically by GitHub Actions every day
+DEFAULT_ROLES = [
+    "Product Analyst",
+    "Product Analyst Intern",
+    "Business Analyst",
+    "Business Analyst Intern",
+    "Data Analyst",
+    "Data Analyst Intern",
+    "Data Engineer",
+    "Data Engineer Intern",
+    "ML Engineer",
+    "ML Engineer Intern",
+    "Marketing Analyst",
+    "Marketing Intern",
+    "Finance Analyst",
+    "HR Intern",
+]
+
+
 if __name__ == "__main__":
 
-    SEARCH_ROLES = [
-        "Product Analyst",
-        "Business Analyst",
-        "Data Analyst",
-        "Data Engineer",
-        "ML Engineer",
-        "Machine Learning Engineer",
-        "Product Analyst Intern",
-        "Business Analyst Intern",
-        "Data Analyst Intern",
-        "Data Engineer Intern",
-        "ML Engineer Intern",
-    ]
+    if len(sys.argv) >= 2:
+        # Called from GitHub Actions: python main.py "Product Analyst" "India"
+        job_title = sys.argv[1]
+        location = sys.argv[2] if len(sys.argv) >= 3 else "India"
+        logging.info(f"Running in CI mode: '{job_title}' in '{location}'")
+        jobs = scrape_linkedin_jobs(job_title, location)
+        save_job_data(jobs)
 
-    all_jobs = []
-    seen_global = set()
+    else:
+        # Called locally — ask user what they want
+        print("\n🔍 WorkFetch Job Scraper")
+        print("------------------------")
+        print("Press Enter with no input to scrape ALL default roles\n")
+        job_title = input("Enter job role to search (e.g. Marketing Intern): ").strip()
+        location = input("Enter location (press Enter for 'India'): ").strip()
 
-    for role in SEARCH_ROLES:
-        logging.info(f"--- Scraping: {role} ---")
-        jobs = scrape_linkedin_jobs(role, "India")
-        for job in jobs:
-            # Deduplicate across all roles by link
-            clean_link = job["Link"].split("(")[-1].rstrip(")")
-            clean_link = clean_link.split("?")[0]
-            if clean_link not in seen_global:
-                seen_global.add(clean_link)
-                all_jobs.append(job)
+        if not location:
+            location = "India"
 
-    logging.info(f"Total unique jobs across all roles: {len(all_jobs)}")
-    save_job_data(all_jobs)
+        if not job_title:
+            # Scrape all default roles
+            print(f"\nNo role entered — scraping all {len(DEFAULT_ROLES)} default roles...\n")
+            all_jobs = []
+            seen_global = set()
+
+            for role in DEFAULT_ROLES:
+                logging.info(f"--- Scraping: {role} ---")
+                jobs = scrape_linkedin_jobs(role, location)
+                for job in jobs:
+                    clean_link = job["Link"].split("(")[-1].rstrip(")").split("?")[0]
+                    if clean_link not in seen_global:
+                        seen_global.add(clean_link)
+                        all_jobs.append(job)
+
+            logging.info(f"Total unique jobs across all roles: {len(all_jobs)}")
+            save_job_data(all_jobs)
+
+        else:
+            # Scrape only the role the user typed
+            print(f"\nSearching for '{job_title}' in '{location}'...\n")
+            jobs = scrape_linkedin_jobs(job_title, location)
+            save_job_data(jobs)
