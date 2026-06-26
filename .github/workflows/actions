@@ -2,8 +2,17 @@ name: Update Data
 
 on:
   workflow_dispatch:
+    inputs:
+      job_title:
+        description: 'Job role to scrape (leave empty to scrape all default roles)'
+        required: false
+        default: ''
+      location:
+        description: 'Location'
+        required: false
+        default: 'India'
   schedule:
-    - cron: '0 * * * *' # runs every hour
+    - cron: '0 2 * * *' # runs once daily at 2AM UTC (7:30AM IST)
 
 jobs:
   build:
@@ -31,8 +40,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run scraper
-        run: python main.py
+      - name: Run scraper (specific role if provided, else all default roles)
+        run: |
+          if [ -n "${{ github.event.inputs.job_title }}" ]; then
+            echo "Scraping specific role: ${{ github.event.inputs.job_title }}"
+            python main.py "${{ github.event.inputs.job_title }}" "${{ github.event.inputs.location }}"
+          else
+            echo "No role specified — scraping all default roles"
+            python main.py
+          fi
 
       - name: Commit changes
         run: |
