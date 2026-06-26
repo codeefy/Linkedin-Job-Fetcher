@@ -222,5 +222,34 @@ def save_job_data(data: list) -> None:
 
 
 if __name__ == "__main__":
-    jobs = scrape_linkedin_jobs("Software Engineer", "India")
-    save_job_data(jobs) 
+
+    SEARCH_ROLES = [
+        "Product Analyst",
+        "Business Analyst",
+        "Data Analyst",
+        "Data Engineer",
+        "ML Engineer",
+        "Machine Learning Engineer",
+        "Product Analyst Intern",
+        "Business Analyst Intern",
+        "Data Analyst Intern",
+        "Data Engineer Intern",
+        "ML Engineer Intern",
+    ]
+
+    all_jobs = []
+    seen_global = set()
+
+    for role in SEARCH_ROLES:
+        logging.info(f"--- Scraping: {role} ---")
+        jobs = scrape_linkedin_jobs(role, "India")
+        for job in jobs:
+            # Deduplicate across all roles by link
+            clean_link = job["Link"].split("(")[-1].rstrip(")")
+            clean_link = clean_link.split("?")[0]
+            if clean_link not in seen_global:
+                seen_global.add(clean_link)
+                all_jobs.append(job)
+
+    logging.info(f"Total unique jobs across all roles: {len(all_jobs)}")
+    save_job_data(all_jobs)
