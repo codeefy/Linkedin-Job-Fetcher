@@ -223,4 +223,4 @@ def save_job_data(data: list) -> None:
 
 if __name__ == "__main__":
     jobs = scrape_linkedin_jobs("Software Engineer", "India")
-    save_job_data(jobs)
+    save_job_data(jobs) 
