@@ -5,7 +5,7 @@ import os
 import platform
 from datetime import datetime, timedelta
 from selenium import webdriver
-from selenium.webdriver.common.by import By
+from selenium.webdriver.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.service import Service
@@ -20,7 +20,6 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 
-# Only keep jobs posted within this many days
 MAX_DAYS_OLD = 30
 
 
@@ -46,10 +45,10 @@ def _extract_description(driver) -> str:
 
 def _get_driver():
     """
-    Returns a Chrome WebDriver.
-    - On Railway/Docker: uses system Google Chrome + chromedriver
-    - Locally on Windows/Mac: uses webdriver-manager to auto-download
-    - Locally on Linux (not Docker): uses chromedriver-autoinstaller
+    Smart Chrome driver setup:
+    - Docker/Railway: uses CHROME_BIN + CHROMEDRIVER_PATH env vars (set in Dockerfile)
+    - Local Windows/Mac: uses webdriver-manager
+    - Local Linux: uses chromedriver-autoinstaller
     """
     chrome_options = webdriver.ChromeOptions()
     chrome_options.add_argument("--headless=new")
@@ -60,7 +59,8 @@ def _get_driver():
     chrome_options.add_argument("--ignore-certificate-errors")
     chrome_options.add_argument("--disable-blink-features=AutomationControlled")
     chrome_options.add_argument("--disable-extensions")
-    chrome_options.add_argument("--dns-prefetch-disable")
+    chrome_options.add_argument("--disable-infobars")
+    chrome_options.add_argument("--remote-debugging-port=9222")
     chrome_options.add_argument(
         "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -69,30 +69,35 @@ def _get_driver():
     chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
     chrome_options.add_experimental_option("useAutomationExtension", False)
 
-    # --- Railway / Docker environment ---
-    if os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("CHROME_BIN"):
-        chrome_bin = os.environ.get("CHROME_BIN", "/usr/bin/google-chrome-stable")
-        chromedriver_path = os.environ.get("CHROMEDRIVER_PATH", "/usr/local/bin/chromedriver")
+    chrome_bin = os.environ.get("CHROME_BIN")
+    chromedriver_path = os.environ.get("CHROMEDRIVER_PATH")
+
+    if chrome_bin and chromedriver_path:
+        # Docker / Railway environment
+        logging.info(f"Docker mode: Chrome={chrome_bin}, Driver={chromedriver_path}")
         chrome_options.binary_location = chrome_bin
         service = Service(executable_path=chromedriver_path)
-        logging.info(f"Using system Chrome at {chrome_bin}")
         return webdriver.Chrome(service=service, options=chrome_options)
 
-    # --- Local Windows / Mac ---
-    if platform.system() in ["Windows", "Darwin"]:
+    elif platform.system() in ["Windows", "Darwin"]:
+        # Local Windows or Mac
+        logging.info("Local mode: using webdriver-manager")
         try:
             from webdriver_manager.chrome import ChromeDriverManager
             service = Service(ChromeDriverManager().install())
-            logging.info("Using webdriver-manager for Chrome")
             return webdriver.Chrome(service=service, options=chrome_options)
         except ImportError:
-            logging.warning("webdriver-manager not found, falling back to autoinstaller")
+            logging.warning("webdriver-manager not installed, trying autoinstaller")
+            import chromedriver_autoinstaller
+            chromedriver_autoinstaller.install()
+            return webdriver.Chrome(options=chrome_options)
 
-    # --- Local Linux / fallback ---
-    import chromedriver_autoinstaller
-    chromedriver_autoinstaller.install()
-    logging.info("Using chromedriver-autoinstaller")
-    return webdriver.Chrome(options=chrome_options)
+    else:
+        # Local Linux fallback
+        logging.info("Linux local mode: using chromedriver-autoinstaller")
+        import chromedriver_autoinstaller
+        chromedriver_autoinstaller.install()
+        return webdriver.Chrome(options=chrome_options)
 
 
 def scrape_linkedin_jobs(
@@ -104,17 +109,25 @@ def scrape_linkedin_jobs(
 
     driver = _get_driver()
 
-    # Mask webdriver detection
-    driver.execute_cdp_cmd(
-        "Page.addScriptToEvaluateOnNewDocument",
-        {"source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"},
-    )
+    try:
+        driver.execute_cdp_cmd(
+            "Page.addScriptToEvaluateOnNewDocument",
+            {"source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"},
+        )
+    except Exception:
+        pass
 
     url = (
         f"https://www.linkedin.com/jobs/search/?f_E=1&origin=JOB_SEARCH_PAGE_JOB_FILTER"
         f"&geoId=102713980&keywords={job_title}&location={location}&refresh=true&sortBy=DD"
     )
-    driver.get(url)
+
+    try:
+        driver.get(url)
+    except Exception as e:
+        logging.error(f"Failed to load LinkedIn: {e}")
+        driver.quit()
+        return []
 
     logging.info(f"Page title: {driver.title}")
     logging.info(f"Current URL: {driver.current_url}")
@@ -193,7 +206,6 @@ def scrape_linkedin_jobs(
 
     except Exception as e:
         logging.error(f"Error while scraping: {e}")
-        return jobs
     finally:
         driver.quit()
 
@@ -212,30 +224,32 @@ def save_job_data(data: list) -> None:
         json.dump(data, f, indent=2)
     logging.info("Saved jobs.json")
 
-    with open("README.md", "r") as f:
-        readme_content = f.read()
+    try:
+        with open("README.md", "r") as f:
+            readme_content = f.read()
 
-    start = readme_content.find("<!--START_SECTION:workfetch-->")
-    end = readme_content.find("<!--END_SECTION:workfetch-->")
+        start = readme_content.find("<!--START_SECTION:workfetch-->")
+        end = readme_content.find("<!--END_SECTION:workfetch-->")
 
-    if start == -1 or end == -1:
-        logging.error("Could not find workfetch section markers in README.md")
-        return
+        if start == -1 or end == -1:
+            logging.error("Could not find workfetch section markers in README.md")
+            return
 
-    new_content = (
-        f"{readme_content[:start]}"
-        f"<!--START_SECTION:workfetch-->\n"
-        f"{df.to_markdown(index=False)}\n"
-        f"{readme_content[end:]}"
-    )
+        new_content = (
+            f"{readme_content[:start]}"
+            f"<!--START_SECTION:workfetch-->\n"
+            f"{df.to_markdown(index=False)}\n"
+            f"{readme_content[end:]}"
+        )
 
-    with open("README.md", "w") as f:
-        f.write(new_content)
+        with open("README.md", "w") as f:
+            f.write(new_content)
 
-    logging.info(f"Saved {len(data)} jobs to README.md")
+        logging.info(f"Saved {len(data)} jobs to README.md")
+    except Exception as e:
+        logging.error(f"Could not update README: {e}")
 
 
-# Default roles scraped automatically by GitHub Actions every day
 DEFAULT_ROLES = [
     "Product Analyst",
     "Product Analyst Intern",
