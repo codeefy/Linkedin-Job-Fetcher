@@ -5,7 +5,7 @@ import os
 import platform
 from datetime import datetime, timedelta
 from selenium import webdriver
-from selenium.webdriver.by import By
+from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.service import Service
@@ -81,16 +81,10 @@ def _get_driver():
 
     elif platform.system() in ["Windows", "Darwin"]:
         # Local Windows or Mac
-        logging.info("Local mode: using webdriver-manager")
-        try:
-            from webdriver_manager.chrome import ChromeDriverManager
-            service = Service(ChromeDriverManager().install())
-            return webdriver.Chrome(service=service, options=chrome_options)
-        except ImportError:
-            logging.warning("webdriver-manager not installed, trying autoinstaller")
-            import chromedriver_autoinstaller
-            chromedriver_autoinstaller.install()
-            return webdriver.Chrome(options=chrome_options)
+        logging.info("Local mode: using chromedriver-autoinstaller")
+        import chromedriver_autoinstaller
+        chromedriver_autoinstaller.install()
+        return webdriver.Chrome(options=chrome_options)
 
     else:
         # Local Linux fallback
