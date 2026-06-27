@@ -1,13 +1,14 @@
 import logging
 import sys
 import json
+import os
 import platform
 from datetime import datetime, timedelta
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-import chromedriver_autoinstaller
+from selenium.webdriver.chrome.service import Service
 from bs4 import BeautifulSoup
 import pandas as pd
 import random
@@ -28,7 +29,7 @@ def _is_recent(date_str: str, max_days: int) -> bool:
         posted = datetime.strptime(date_str, "%Y-%m-%d")
         return datetime.now() - posted <= timedelta(days=max_days)
     except (ValueError, TypeError):
-        return True  # include if date can't be parsed
+        return True
 
 
 def _extract_description(driver) -> str:
@@ -43,6 +44,57 @@ def _extract_description(driver) -> str:
         return ""
 
 
+def _get_driver():
+    """
+    Returns a Chrome WebDriver.
+    - On Railway/Docker: uses system Google Chrome + chromedriver
+    - Locally on Windows/Mac: uses webdriver-manager to auto-download
+    - Locally on Linux (not Docker): uses chromedriver-autoinstaller
+    """
+    chrome_options = webdriver.ChromeOptions()
+    chrome_options.add_argument("--headless=new")
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("--ignore-certificate-errors")
+    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
+    chrome_options.add_argument("--disable-extensions")
+    chrome_options.add_argument("--dns-prefetch-disable")
+    chrome_options.add_argument(
+        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    )
+    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    chrome_options.add_experimental_option("useAutomationExtension", False)
+
+    # --- Railway / Docker environment ---
+    if os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("CHROME_BIN"):
+        chrome_bin = os.environ.get("CHROME_BIN", "/usr/bin/google-chrome-stable")
+        chromedriver_path = os.environ.get("CHROMEDRIVER_PATH", "/usr/local/bin/chromedriver")
+        chrome_options.binary_location = chrome_bin
+        service = Service(executable_path=chromedriver_path)
+        logging.info(f"Using system Chrome at {chrome_bin}")
+        return webdriver.Chrome(service=service, options=chrome_options)
+
+    # --- Local Windows / Mac ---
+    if platform.system() in ["Windows", "Darwin"]:
+        try:
+            from webdriver_manager.chrome import ChromeDriverManager
+            service = Service(ChromeDriverManager().install())
+            logging.info("Using webdriver-manager for Chrome")
+            return webdriver.Chrome(service=service, options=chrome_options)
+        except ImportError:
+            logging.warning("webdriver-manager not found, falling back to autoinstaller")
+
+    # --- Local Linux / fallback ---
+    import chromedriver_autoinstaller
+    chromedriver_autoinstaller.install()
+    logging.info("Using chromedriver-autoinstaller")
+    return webdriver.Chrome(options=chrome_options)
+
+
 def scrape_linkedin_jobs(
     job_title: str,
     location: str,
@@ -50,33 +102,9 @@ def scrape_linkedin_jobs(
     max_days_old: int = MAX_DAYS_OLD,
 ) -> list:
 
-    chromedriver_autoinstaller.install()
+    driver = _get_driver()
 
-    chrome_options = webdriver.ChromeOptions()
-    chrome_options.add_argument("--window-size=1920,1080")
-    chrome_options.add_argument("--ignore-certificate-errors")
-
-    # Anti-detection flags
-    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    chrome_options.add_experimental_option("useAutomationExtension", False)
-    chrome_options.add_argument(
-        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    )
-
-    # Comment this out if you want to see the browser window while testing locally
-    chrome_options.add_argument("--headless")
-
-    if platform.system() == "Linux":
-        # Required for Chrome in containerized/CI environments
-        for opt in ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]:
-            chrome_options.add_argument(opt)
-
-    driver = webdriver.Chrome(options=chrome_options)
-
-    # Mask webdriver property to avoid bot detection
+    # Mask webdriver detection
     driver.execute_cdp_cmd(
         "Page.addScriptToEvaluateOnNewDocument",
         {"source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"},
@@ -88,11 +116,9 @@ def scrape_linkedin_jobs(
     )
     driver.get(url)
 
-    # Debug: log page title and URL to confirm LinkedIn loaded correctly
     logging.info(f"Page title: {driver.title}")
     logging.info(f"Current URL: {driver.current_url}")
 
-    # Wait for job cards to appear before scrolling
     time.sleep(random.choice(range(4, 8)))
 
     for i in range(pages):
@@ -138,18 +164,15 @@ def scrape_linkedin_jobs(
             apply_link = link_elem["href"]
             date_posted = time_elem.get("datetime", "")
 
-            # Skip stale postings
             if not _is_recent(date_posted, max_days_old):
                 logging.info(f'Skipping stale posting: "{title_text}" ({date_posted})')
                 continue
 
-            # Deduplicate by URL
             clean_link = apply_link.split("?")[0]
             if clean_link in seen_links:
                 continue
             seen_links.add(clean_link)
 
-            # Navigate to job page and extract description
             driver.get(apply_link)
             time.sleep(random.choice(range(5, 11)))
             description = _extract_description(driver)
@@ -162,7 +185,7 @@ def scrape_linkedin_jobs(
                     "Link": f"[Apply]({apply_link})",
                     "Date Posted": date_posted,
                     "Description": description[:300] + "..." if len(description) > 300 else description,
-                    "Search Role": job_title,  # track which search this came from
+                    "Search Role": job_title,
                 }
             )
 
@@ -185,7 +208,6 @@ def save_job_data(data: list) -> None:
     data = sorted(data, key=lambda x: x["Date Posted"], reverse=True)
     df = pd.DataFrame(data)
 
-    # Save as JSON for the frontend
     with open("jobs.json", "w") as f:
         json.dump(data, f, indent=2)
     logging.info("Saved jobs.json")
@@ -235,7 +257,6 @@ DEFAULT_ROLES = [
 if __name__ == "__main__":
 
     if len(sys.argv) >= 2:
-        # Called from GitHub Actions: python main.py "Product Analyst" "India"
         job_title = sys.argv[1]
         location = sys.argv[2] if len(sys.argv) >= 3 else "India"
         logging.info(f"Running in CI mode: '{job_title}' in '{location}'")
@@ -243,7 +264,6 @@ if __name__ == "__main__":
         save_job_data(jobs)
 
     else:
-        # Called locally — ask user what they want
         print("\n🔍 WorkFetch Job Scraper")
         print("------------------------")
         print("Press Enter with no input to scrape ALL default roles\n")
@@ -254,7 +274,6 @@ if __name__ == "__main__":
             location = "India"
 
         if not job_title:
-            # Scrape all default roles
             print(f"\nNo role entered — scraping all {len(DEFAULT_ROLES)} default roles...\n")
             all_jobs = []
             seen_global = set()
@@ -272,7 +291,6 @@ if __name__ == "__main__":
             save_job_data(all_jobs)
 
         else:
-            # Scrape only the role the user typed
             print(f"\nSearching for '{job_title}' in '{location}'...\n")
             jobs = scrape_linkedin_jobs(job_title, location)
             save_job_data(jobs)
